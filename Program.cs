@@ -119,14 +119,42 @@ class Program
             {
                 Console.WriteLine($"Connecting to Kepware (attempt {retryCount + 1})...");
 
+                // PKI stores must be specified even for an unsecured connection,
+                // otherwise config validation throws
+                // "TrustedIssuerCertificates StorePath must be specified."
+                const string pkiRoot =
+                    @"%LocalApplicationData%\KepwareHistorianClient\pki";
+
                 var config = new ApplicationConfiguration()
                 {
                     ApplicationName = "KepwareHistorianClient",
+                    ApplicationUri = "urn:localhost:KepwareHistorianClient",
                     ApplicationType = ApplicationType.Client,
                     SecurityConfiguration = new SecurityConfiguration
                     {
                         AutoAcceptUntrustedCertificates = true,
-                        ApplicationCertificate = new CertificateIdentifier()
+                        AddAppCertToTrustedStore = true,
+                        ApplicationCertificate = new CertificateIdentifier
+                        {
+                            StoreType = "Directory",
+                            StorePath = pkiRoot + @"\own",
+                            SubjectName = "CN=KepwareHistorianClient, DC=localhost"
+                        },
+                        TrustedIssuerCertificates = new CertificateTrustList
+                        {
+                            StoreType = "Directory",
+                            StorePath = pkiRoot + @"\issuer"
+                        },
+                        TrustedPeerCertificates = new CertificateTrustList
+                        {
+                            StoreType = "Directory",
+                            StorePath = pkiRoot + @"\trusted"
+                        },
+                        RejectedCertificateStore = new CertificateStoreIdentifier
+                        {
+                            StoreType = "Directory",
+                            StorePath = pkiRoot + @"\rejected"
+                        }
                     },
                     TransportQuotas = new TransportQuotas
                     {
