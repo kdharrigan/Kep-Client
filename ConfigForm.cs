@@ -42,6 +42,16 @@ public class ConfigForm : Form
     private DateTimePicker _dtEnd;
     private DataGridView _grid;
 
+    // Live tab
+    private Button _btnLive;
+    private CheckBox _chkLog;
+    private DataGridView _liveGrid;
+    private System.Windows.Forms.Timer _liveTimer;
+    private StreamWriter _liveCsv;
+    private readonly System.Collections.Generic.Dictionary<string, int> _liveRowByTag =
+        new System.Collections.Generic.Dictionary<string, int>();
+    private bool _liveBusy;
+
     private Label _status;
 
     /// <summary>Node metadata stashed on each TreeNode.Tag.</summary>
@@ -91,6 +101,7 @@ public class ConfigForm : Form
     private void BuildUi()
     {
         var tabs = new TabControl { Dock = DockStyle.Fill };
+        tabs.TabPages.Add(BuildLiveTab());
         tabs.TabPages.Add(BuildConnectionTab());
         tabs.TabPages.Add(BuildTagsTab());
         tabs.TabPages.Add(BuildSettingsTab());
@@ -204,6 +215,198 @@ public class ConfigForm : Form
 
         page.Controls.AddRange(new Control[] { lblCsv, _txtCsvPath, btnBrowseCsv, lblScan, _numScan });
         return page;
+    }
+
+    private TabPage BuildLiveTab()
+    {
+        var page = new TabPage("Live");
+
+        _btnLive = new Button { Text = "Start", Left = 12, Top = 12, Width = 100, Height = 28 };
+        _btnLive.Click += async (s, e) => await ToggleLiveAsync();
+
+        _chkLog = new CheckBox { Text = "Log to CSV while running", Left = 125, Top = 16, Width = 220, Checked = true };
+
+        _liveGrid = new DataGridView
+        {
+            Left = 12,
+            Top = 50,
+            Width = 736,
+            Height = 484,
+            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+            ReadOnly = true,
+            AllowUserToAddRows = false,
+            RowHeadersVisible = false,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect
+        };
+        _liveGrid.Columns.Add("Tag", "Tag");
+        _liveGrid.Columns.Add("Value", "Value");
+        _liveGrid.Columns.Add("Status", "Status");
+        _liveGrid.Columns.Add("Updated", "Updated");
+
+        page.Controls.AddRange(new Control[] { _btnLive, _chkLog, _liveGrid });
+        return page;
+    }
+
+    private async Task ToggleLiveAsync()
+    {
+        if (_liveTimer != null && _liveTimer.Enabled)
+        {
+            StopLive();
+            return;
+        }
+
+        SyncHistorianFromUi();
+        if (_settings.Historian.Tags.Count == 0)
+        {
+            SetStatus("No tags to monitor. Add tags on the Tags tab first.");
+            return;
+        }
+
+        try
+        {
+            UseWaitCursor = true;
+            SetStatus("Starting live monitor ...");
+
+            await EnsureSessionAsync();
+
+            _liveGrid.Rows.Clear();
+            _liveRowByTag.Clear();
+            foreach (var tag in _settings.Historian.Tags)
+            {
+                int idx = _liveGrid.Rows.Add(tag, "", "", "");
+                _liveRowByTag[tag] = idx;
+            }
+
+            if (_chkLog.Checked)
+            {
+                OpenLiveCsv();
+            }
+
+            if (_liveTimer == null)
+            {
+                _liveTimer = new System.Windows.Forms.Timer();
+                _liveTimer.Tick += LiveTimer_Tick;
+            }
+            _liveTimer.Interval = Math.Max(100, _settings.Historian.ScanIntervalMs);
+            _liveTimer.Start();
+
+            _btnLive.Text = "Stop";
+            SetStatus($"Live: monitoring {_settings.Historian.Tags.Count} tag(s) every {_liveTimer.Interval} ms" +
+                      (_chkLog.Checked ? $", logging to {_settings.Historian.CsvPath}." : "."));
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Failed to start live monitor.");
+            MessageBox.Show(this, ex.Message, "Live monitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            StopLive();
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
+    }
+
+    private async void LiveTimer_Tick(object sender, EventArgs e)
+    {
+        if (_liveBusy)
+        {
+            return; // don't overlap reads if the server is slow
+        }
+        if (_session == null || !_session.Connected)
+        {
+            SetStatus("Session lost – stopping live monitor.");
+            StopLive();
+            return;
+        }
+
+        _liveBusy = true;
+        try
+        {
+            foreach (var tag in _settings.Historian.Tags)
+            {
+                string value;
+                string status;
+                try
+                {
+                    DataValue dv = await Task.Run(() => _session.ReadValue(tag));
+                    value = dv.Value?.ToString() ?? "null";
+                    status = dv.StatusCode.ToString();
+                }
+                catch (Exception ex)
+                {
+                    value = "ERR";
+                    status = ex.Message;
+                }
+
+                DateTime ts = DateTime.Now;
+                UpdateLiveRow(tag, value, status, ts);
+
+                if (_liveCsv != null && value != "ERR")
+                {
+                    _liveCsv.WriteLine($"{ts:yyyy-MM-dd HH:mm:ss.fff},{tag},{value},{status}");
+                }
+            }
+
+            _liveCsv?.Flush();
+        }
+        finally
+        {
+            _liveBusy = false;
+        }
+    }
+
+    private void UpdateLiveRow(string tag, string value, string status, DateTime ts)
+    {
+        if (_liveRowByTag.TryGetValue(tag, out int idx) && idx < _liveGrid.Rows.Count)
+        {
+            var cells = _liveGrid.Rows[idx].Cells;
+            cells[1].Value = value;
+            cells[2].Value = status;
+            cells[3].Value = ts.ToString("HH:mm:ss.fff");
+        }
+    }
+
+    private void OpenLiveCsv()
+    {
+        string dir = Path.GetDirectoryName(_settings.Historian.CsvPath);
+        if (!string.IsNullOrEmpty(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        bool exists = File.Exists(_settings.Historian.CsvPath);
+        _liveCsv = new StreamWriter(_settings.Historian.CsvPath, append: true, new UTF8Encoding(false))
+        {
+            AutoFlush = false
+        };
+        if (!exists)
+        {
+            _liveCsv.WriteLine("Timestamp,Tag,Value,StatusCode");
+        }
+    }
+
+    private void StopLive()
+    {
+        _liveTimer?.Stop();
+        if (_btnLive != null)
+        {
+            _btnLive.Text = "Start";
+        }
+        if (_liveCsv != null)
+        {
+            try
+            {
+                _liveCsv.Flush();
+                _liveCsv.Dispose();
+            }
+            catch
+            {
+                // ignore flush/dispose errors on shutdown
+            }
+            _liveCsv = null;
+        }
+        SetStatus("Live monitor stopped.");
     }
 
     private TabPage BuildHistoryTab()
@@ -620,10 +823,8 @@ public class ConfigForm : Form
         _settings.Opc.Password = _txtPass.Text;
     }
 
-    private void Save()
+    private void SyncHistorianFromUi()
     {
-        ApplyConnectionToSettings();
-
         _settings.Historian.CsvPath = _txtCsvPath.Text.Trim();
         _settings.Historian.ScanIntervalMs = (int)_numScan.Value;
 
@@ -632,6 +833,12 @@ public class ConfigForm : Form
         {
             _settings.Historian.Tags.Add(item.ToString());
         }
+    }
+
+    private void Save()
+    {
+        ApplyConnectionToSettings();
+        SyncHistorianFromUi();
 
         try
         {
@@ -668,6 +875,7 @@ public class ConfigForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        StopLive();
         CloseSession();
         base.OnFormClosed(e);
     }

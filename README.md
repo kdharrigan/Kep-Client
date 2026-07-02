@@ -16,30 +16,36 @@ This project is a lightweight OPC UA client written in C# for collecting industr
 - Graceful shutdown support
 - Fault-tolerant read loop
 
-## Configuration
+## Running
 
-All settings live in `appsettings.json` (endpoint, security, credentials,
-CSV path, scan interval, and the tag list). When moving to a new machine,
-run the built-in configuration utility instead of editing JSON by hand:
-
-```
-dotnet run -- --configure
-```
-
-This opens a Windows Forms window that lets you:
-
-- **Discover** OPC UA servers at a discovery URL and list their endpoints
-- Pick an **endpoint** and security mode
-- Choose **Anonymous** or **username/password** login
-- **Browse** the server address space and add variable nodes as tags
-- Set the **CSV output path** and **scan interval**
-- **History** tab: read archived values for a tag over a time range from
-  Kepware's Local Historian (OPC UA Historical Access) and export to CSV
-
-Click **Save** to write `appsettings.json`, then run the historian normally:
+The application launches a Windows Forms window by default:
 
 ```
 dotnet run
+```
+
+All settings live in `appsettings.json` (endpoint, security, credentials,
+CSV path, scan interval, and the tag list); the window reads and writes it,
+so moving to a new machine is just build + configure. The window provides:
+
+- **Live** tab: displays the current value, status, and update time of every
+  configured tag, refreshed at the scan interval, and logs to CSV while running
+- **Connection** tab: **discover** OPC UA servers at a discovery URL, list
+  their endpoints, pick a security mode, and choose **Anonymous** or
+  **username/password** login
+- **Tags** tab: **browse** the server address space and add variable nodes
+- **Logging** tab: set the **CSV output path** and **scan interval**
+- **History** tab: read archived values for a tag over a time range from
+  Kepware's Local Historian (OPC UA Historical Access) and export to CSV
+
+Click **Save** on any change to persist `appsettings.json`.
+
+### Headless mode
+
+To run purely as a console logger (e.g. as a background service) with no UI:
+
+```
+dotnet run -- --headless
 ```
 
 ### Viewing historical data

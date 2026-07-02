@@ -19,17 +19,18 @@ class Program
     [STAThread]
     static void Main(string[] args)
     {
-        // Launch the configuration UI with:  dotnet run -- --configure
-        if (args.Any(a => a.Equals("--configure", StringComparison.OrdinalIgnoreCase))
-            || args.Any(a => a.Equals("-c", StringComparison.OrdinalIgnoreCase)))
+        // Run as a headless console logger with:  dotnet run -- --headless
+        // (useful for running as a background service). Otherwise launch the UI.
+        if (args.Any(a => a.Equals("--headless", StringComparison.OrdinalIgnoreCase))
+            || args.Any(a => a.Equals("--run", StringComparison.OrdinalIgnoreCase)))
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new ConfigForm());
+            RunHistorianAsync().GetAwaiter().GetResult();
             return;
         }
 
-        RunHistorianAsync().GetAwaiter().GetResult();
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.Run(new ConfigForm());
     }
 
     static async Task RunHistorianAsync()
