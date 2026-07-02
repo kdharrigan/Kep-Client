@@ -1,0 +1,5 @@
+CorrelationId: 07b1a32e-965c-4b11-a94b-2f4702e6f8cb
+UTC DateTime: 07/02/2026 14:48:48
+
+The following file/folder has not been downloaded
+0. .vs/KepwareHistorianClient/FileContentIndex/read.lock
