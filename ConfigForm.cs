@@ -1,5 +1,7 @@
 using System;
 using System.Drawing;
+using System.IO;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Opc.Ua;
@@ -33,6 +35,12 @@ public class ConfigForm : Form
     // Settings tab
     private TextBox _txtCsvPath;
     private NumericUpDown _numScan;
+
+    // History tab
+    private ComboBox _cmbHistTag;
+    private DateTimePicker _dtStart;
+    private DateTimePicker _dtEnd;
+    private DataGridView _grid;
 
     private Label _status;
 
@@ -86,6 +94,14 @@ public class ConfigForm : Form
         tabs.TabPages.Add(BuildConnectionTab());
         tabs.TabPages.Add(BuildTagsTab());
         tabs.TabPages.Add(BuildSettingsTab());
+        tabs.TabPages.Add(BuildHistoryTab());
+        tabs.Selected += (s, e) =>
+        {
+            if (e.TabPage != null && e.TabPage.Text == "History")
+            {
+                RefreshHistoryTagList();
+            }
+        };
 
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44 };
         var btnSave = new Button { Text = "Save", Width = 100, Height = 30, Left = 560, Top = 7, Anchor = AnchorStyles.Right | AnchorStyles.Top };
@@ -188,6 +204,164 @@ public class ConfigForm : Form
 
         page.Controls.AddRange(new Control[] { lblCsv, _txtCsvPath, btnBrowseCsv, lblScan, _numScan });
         return page;
+    }
+
+    private TabPage BuildHistoryTab()
+    {
+        var page = new TabPage("History");
+
+        var lblTag = new Label { Text = "Tag (NodeId):", Left = 12, Top = 16, Width = 90 };
+        _cmbHistTag = new ComboBox { Left = 105, Top = 12, Width = 440, DropDownStyle = ComboBoxStyle.DropDown, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+
+        var lblStart = new Label { Text = "Start:", Left = 12, Top = 48, Width = 45 };
+        _dtStart = new DateTimePicker { Left = 60, Top = 44, Width = 180, Format = DateTimePickerFormat.Custom, CustomFormat = "yyyy-MM-dd HH:mm:ss", ShowUpDown = true };
+        var lblEnd = new Label { Text = "End:", Left = 260, Top = 48, Width = 35 };
+        _dtEnd = new DateTimePicker { Left = 300, Top = 44, Width = 180, Format = DateTimePickerFormat.Custom, CustomFormat = "yyyy-MM-dd HH:mm:ss", ShowUpDown = true };
+
+        // Default to the last hour.
+        _dtEnd.Value = DateTime.Now;
+        _dtStart.Value = DateTime.Now.AddHours(-1);
+
+        var btnRead = new Button { Text = "Read History", Left = 500, Top = 42, Width = 120, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+        btnRead.Click += async (s, e) => await ReadHistoryAsync();
+        var btnExport = new Button { Text = "Export CSV...", Left = 628, Top = 42, Width = 120, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+        btnExport.Click += (s, e) => ExportHistory();
+
+        _grid = new DataGridView
+        {
+            Left = 12,
+            Top = 82,
+            Width = 736,
+            Height = 452,
+            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+            ReadOnly = true,
+            AllowUserToAddRows = false,
+            RowHeadersVisible = false,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect
+        };
+        _grid.Columns.Add("Timestamp", "Timestamp");
+        _grid.Columns.Add("Value", "Value");
+        _grid.Columns.Add("Status", "Status");
+
+        page.Controls.AddRange(new Control[]
+        {
+            lblTag, _cmbHistTag,
+            lblStart, _dtStart, lblEnd, _dtEnd,
+            btnRead, btnExport,
+            _grid
+        });
+        return page;
+    }
+
+    private void RefreshHistoryTagList()
+    {
+        string current = _cmbHistTag.Text;
+        _cmbHistTag.Items.Clear();
+        foreach (var tag in _lstTags.Items)
+        {
+            _cmbHistTag.Items.Add(tag.ToString());
+        }
+        if (!string.IsNullOrEmpty(current))
+        {
+            _cmbHistTag.Text = current;
+        }
+        else if (_cmbHistTag.Items.Count > 0)
+        {
+            _cmbHistTag.SelectedIndex = 0;
+        }
+    }
+
+    private async Task ReadHistoryAsync()
+    {
+        string nodeIdStr = _cmbHistTag.Text.Trim();
+        if (nodeIdStr.Length == 0)
+        {
+            SetStatus("Select or enter a tag NodeId to read.");
+            return;
+        }
+
+        DateTime startUtc = _dtStart.Value.ToUniversalTime();
+        DateTime endUtc = _dtEnd.Value.ToUniversalTime();
+
+        try
+        {
+            UseWaitCursor = true;
+            SetStatus($"Reading history for {nodeIdStr} ...");
+
+            var session = await EnsureSessionAsync();
+            NodeId nodeId = NodeId.Parse(nodeIdStr);
+            var values = await Task.Run(() => OpcUaHelper.ReadHistory(session, nodeId, startUtc, endUtc));
+
+            _grid.Rows.Clear();
+            foreach (var dv in values)
+            {
+                _grid.Rows.Add(
+                    dv.SourceTimestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff"),
+                    dv.Value?.ToString() ?? "null",
+                    dv.StatusCode.ToString());
+            }
+
+            SetStatus(values.Count == 0
+                ? "No historical values returned. Confirm the tag is historized in the Local Historian and the time range has data."
+                : $"Read {values.Count} value(s) for {nodeIdStr}.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("History read failed.");
+            MessageBox.Show(this, ex.Message, "History read failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
+    }
+
+    private void ExportHistory()
+    {
+        if (_grid.Rows.Count == 0)
+        {
+            SetStatus("Nothing to export – read history first.");
+            return;
+        }
+
+        using (var dlg = new SaveFileDialog
+        {
+            Title = "Export history to CSV",
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            FileName = "history_export.csv"
+        })
+        {
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+
+            string tag = _cmbHistTag.Text.Trim();
+            try
+            {
+                using (var w = new StreamWriter(dlg.FileName, false, new UTF8Encoding(false)))
+                {
+                    w.WriteLine("Timestamp,Tag,Value,StatusCode");
+                    foreach (DataGridViewRow row in _grid.Rows)
+                    {
+                        if (row.IsNewRow)
+                        {
+                            continue;
+                        }
+                        string ts = row.Cells[0].Value?.ToString() ?? "";
+                        string val = row.Cells[1].Value?.ToString() ?? "";
+                        string st = row.Cells[2].Value?.ToString() ?? "";
+                        w.WriteLine($"{ts},{tag},{val},{st}");
+                    }
+                }
+                SetStatus($"Exported {_grid.Rows.Count} row(s) to {dlg.FileName}");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Export failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
     }
 
     private void LoadSettingsIntoUi()
@@ -297,19 +471,32 @@ public class ConfigForm : Form
         SetStatus($"Using endpoint {item.Endpoint.EndpointUrl} ({item.Endpoint.SecurityMode}).");
     }
 
+    /// <summary>Reuses the current session if connected, otherwise opens a new one.</summary>
+    private async Task<Session> EnsureSessionAsync()
+    {
+        if (_session != null && _session.Connected)
+        {
+            return _session;
+        }
+
+        ApplyConnectionToSettings();
+        var config = await OpcUaHelper.BuildConfigurationAsync();
+        CloseSession();
+        _session = await OpcUaHelper.CreateSessionAsync(config, _settings);
+        return _session;
+    }
+
     private async Task ConnectAndBrowseAsync()
     {
-        // Persist the current connection choices so CreateSession uses them.
-        ApplyConnectionToSettings();
-
         try
         {
             UseWaitCursor = true;
             SetStatus("Connecting ...");
 
-            var config = await OpcUaHelper.BuildConfigurationAsync();
+            // Force a fresh session so browsing reflects the current settings.
+            ApplyConnectionToSettings();
             CloseSession();
-            _session = await OpcUaHelper.CreateSessionAsync(config, _settings);
+            await EnsureSessionAsync();
 
             _tree.Nodes.Clear();
             var root = new TreeNode("Objects")

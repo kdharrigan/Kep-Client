@@ -33,12 +33,23 @@ This opens a Windows Forms window that lets you:
 - Choose **Anonymous** or **username/password** login
 - **Browse** the server address space and add variable nodes as tags
 - Set the **CSV output path** and **scan interval**
+- **History** tab: read archived values for a tag over a time range from
+  Kepware's Local Historian (OPC UA Historical Access) and export to CSV
 
 Click **Save** to write `appsettings.json`, then run the historian normally:
 
 ```
 dotnet run
 ```
+
+### Viewing historical data
+
+Kepware's Local Historian archives (e.g.
+`C:\ProgramData\PTC\Kepware Server\V7\Historical Data`) are a proprietary
+binary format and should not be read directly. Instead, the **History** tab
+queries them over OPC UA Historical Access: choose a tag and a start/end
+time, click **Read History**, and optionally **Export CSV**. Only tags that
+are enabled for historization in the Local Historian plug-in return data.
 
 ## Technologies
 

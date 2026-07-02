@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Opc.Ua;
 using Opc.Ua.Client;
@@ -133,6 +134,66 @@ public static class OpcUaHelper
             60000,
             identity,
             null);
+    }
+
+    /// <summary>
+    /// Reads raw historical values for a node between two UTC times via OPC UA
+    /// Historical Access, following continuation points until the range is
+    /// exhausted. Works against Kepware's Local Historian for historized tags.
+    /// </summary>
+    public static List<DataValue> ReadHistory(Session session, NodeId nodeId, DateTime startUtc, DateTime endUtc)
+    {
+        var values = new List<DataValue>();
+
+        var details = new ReadRawModifiedDetails
+        {
+            IsReadModified = false,
+            StartTime = startUtc,
+            EndTime = endUtc,
+            NumValuesPerNode = 0, // 0 = no limit; server may still page
+            ReturnBounds = false
+        };
+
+        var nodesToRead = new HistoryReadValueIdCollection
+        {
+            new HistoryReadValueId { NodeId = nodeId }
+        };
+
+        byte[] continuationPoint = null;
+        do
+        {
+            nodesToRead[0].ContinuationPoint = continuationPoint;
+
+            session.HistoryRead(
+                null,
+                new ExtensionObject(details),
+                TimestampsToReturn.Source,
+                false,
+                nodesToRead,
+                out HistoryReadResultCollection results,
+                out DiagnosticInfoCollection _);
+
+            if (results == null || results.Count == 0)
+            {
+                break;
+            }
+
+            HistoryReadResult result = results[0];
+            if (StatusCode.IsBad(result.StatusCode))
+            {
+                throw new ServiceResultException(result.StatusCode);
+            }
+
+            continuationPoint = result.ContinuationPoint;
+
+            if (ExtensionObject.ToEncodeable(result.HistoryData) is HistoryData data)
+            {
+                values.AddRange(data.DataValues);
+            }
+        }
+        while (continuationPoint != null && continuationPoint.Length > 0);
+
+        return values;
     }
 
     /// <summary>Browses the hierarchical children (objects and variables) of a node.</summary>
