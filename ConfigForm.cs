@@ -151,8 +151,16 @@ public class ConfigForm : Form
         var btnBrowse = new Button { Text = "Connect && Browse", Left = 15, Top = 12, Width = 160 };
         btnBrowse.Click += async (s, e) => await ConnectAndBrowseAsync();
 
-        _tree = new TreeView { Left = 15, Top = 46, Width = 400, Height = 490, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left };
+        _tree = new TreeView { Left = 15, Top = 46, Width = 400, Height = 490, HideSelection = false, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left };
         _tree.BeforeExpand += Tree_BeforeExpand;
+        // Double-clicking a variable (leaf) node adds it as a tag.
+        _tree.NodeMouseDoubleClick += (s, e) =>
+        {
+            if (e.Node?.Tag is NodeTag t && t.IsVariable)
+            {
+                AddNode(e.Node);
+            }
+        };
 
         var btnAdd = new Button { Text = "Add tag  >>", Left = 425, Top = 120, Width = 110, Anchor = AnchorStyles.Top };
         btnAdd.Click += (s, e) => AddSelectedTag();
@@ -365,19 +373,28 @@ public class ConfigForm : Form
 
     private void AddSelectedTag()
     {
-        var node = _tree.SelectedNode;
-        if (node?.Tag is NodeTag tag && tag.IsVariable)
+        AddNode(_tree.SelectedNode);
+    }
+
+    private void AddNode(TreeNode node)
+    {
+        if (node?.Tag is NodeTag tag && tag.Id != null)
         {
             string id = tag.Id.ToString();
-            if (!_lstTags.Items.Contains(id))
+            if (_lstTags.Items.Contains(id))
             {
-                _lstTags.Items.Add(id);
-                SetStatus($"Added {id}.");
+                SetStatus($"{id} is already in the list.");
+                return;
             }
+
+            _lstTags.Items.Add(id);
+            SetStatus(tag.IsVariable
+                ? $"Added {id}."
+                : $"Added {id}  (note: not a variable node, may not be readable).");
         }
         else
         {
-            SetStatus("Select a variable node (shown in green) to add.");
+            SetStatus("Select a node in the tree first, then click Add (variables are shown in green).");
         }
     }
 
