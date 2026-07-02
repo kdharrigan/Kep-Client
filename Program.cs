@@ -173,6 +173,23 @@ class Program
                     e.Accept = true;
                 };
 
+                // The stack requires a client application instance certificate
+                // even for unsecured sessions. Create a self-signed one in the
+                // "own" store on first run if it doesn't already exist.
+                var application = new ApplicationInstance
+                {
+                    ApplicationName = config.ApplicationName,
+                    ApplicationType = ApplicationType.Client,
+                    ApplicationConfiguration = config
+                };
+                bool haveCert =
+                    await application.CheckApplicationInstanceCertificate(false, 2048);
+                if (!haveCert)
+                {
+                    throw new Exception(
+                        "Application instance certificate could not be created.");
+                }
+
                 var endpointDescription =
                     CoreClientUtils.SelectEndpoint(
                         config,
