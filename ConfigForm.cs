@@ -37,7 +37,7 @@ public class ConfigForm : Form
     private NumericUpDown _numScan;
 
     // History tab
-    private ComboBox _cmbHistTag;
+    private TreeView _histTree;
     private DateTimePicker _dtStart;
     private DateTimePicker _dtEnd;
     private DataGridView _grid;
@@ -106,13 +106,6 @@ public class ConfigForm : Form
         tabs.TabPages.Add(BuildTagsTab());
         tabs.TabPages.Add(BuildSettingsTab());
         tabs.TabPages.Add(BuildHistoryTab());
-        tabs.Selected += (s, e) =>
-        {
-            if (e.TabPage != null && e.TabPage.Text == "History")
-            {
-                RefreshHistoryTagList();
-            }
-        };
 
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44 };
         var btnSave = new Button { Text = "Save", Width = 100, Height = 30, Left = 560, Top = 7, Anchor = AnchorStyles.Right | AnchorStyles.Top };
@@ -413,29 +406,40 @@ public class ConfigForm : Form
     {
         var page = new TabPage("History");
 
-        var lblTag = new Label { Text = "Tag (NodeId):", Left = 12, Top = 16, Width = 90 };
-        _cmbHistTag = new ComboBox { Left = 105, Top = 12, Width = 440, DropDownStyle = ComboBoxStyle.DropDown, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+        var btnBrowse = new Button { Text = "Connect && Browse", Left = 12, Top = 11, Width = 150 };
+        btnBrowse.Click += async (s, e) => await ConnectAndBrowseHistoryAsync();
 
-        var lblStart = new Label { Text = "Start:", Left = 12, Top = 48, Width = 45 };
-        _dtStart = new DateTimePicker { Left = 60, Top = 44, Width = 180, Format = DateTimePickerFormat.Custom, CustomFormat = "yyyy-MM-dd HH:mm:ss", ShowUpDown = true };
-        var lblEnd = new Label { Text = "End:", Left = 260, Top = 48, Width = 35 };
-        _dtEnd = new DateTimePicker { Left = 300, Top = 44, Width = 180, Format = DateTimePickerFormat.Custom, CustomFormat = "yyyy-MM-dd HH:mm:ss", ShowUpDown = true };
+        var lblStart = new Label { Text = "Start:", Left = 175, Top = 16, Width = 40 };
+        _dtStart = new DateTimePicker { Left = 215, Top = 12, Width = 165, Format = DateTimePickerFormat.Custom, CustomFormat = "yyyy-MM-dd HH:mm:ss", ShowUpDown = true };
+        var lblEnd = new Label { Text = "End:", Left = 388, Top = 16, Width = 32 };
+        _dtEnd = new DateTimePicker { Left = 422, Top = 12, Width = 165, Format = DateTimePickerFormat.Custom, CustomFormat = "yyyy-MM-dd HH:mm:ss", ShowUpDown = true };
 
         // Default to the last hour.
         _dtEnd.Value = DateTime.Now;
         _dtStart.Value = DateTime.Now.AddHours(-1);
 
-        var btnRead = new Button { Text = "Read History", Left = 500, Top = 42, Width = 120, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+        var btnRead = new Button { Text = "Read History", Left = 600, Top = 11, Width = 148, Anchor = AnchorStyles.Top | AnchorStyles.Right };
         btnRead.Click += async (s, e) => await ReadHistoryAsync();
-        var btnExport = new Button { Text = "Export CSV...", Left = 628, Top = 42, Width = 120, Anchor = AnchorStyles.Top | AnchorStyles.Right };
-        btnExport.Click += (s, e) => ExportHistory();
+
+        var lblTree = new Label { Text = "Check historized tags  (H) = has archived data:", Left = 12, Top = 46, Width = 300 };
+        _histTree = new TreeView
+        {
+            Left = 12,
+            Top = 66,
+            Width = 300,
+            Height = 430,
+            CheckBoxes = true,
+            HideSelection = false,
+            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left
+        };
+        _histTree.BeforeExpand += HistTree_BeforeExpand;
 
         _grid = new DataGridView
         {
-            Left = 12,
-            Top = 82,
-            Width = 736,
-            Height = 452,
+            Left = 320,
+            Top = 66,
+            Width = 428,
+            Height = 430,
             Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
             ReadOnly = true,
             AllowUserToAddRows = false,
@@ -443,71 +447,126 @@ public class ConfigForm : Form
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect
         };
+        _grid.Columns.Add("Tag", "Tag");
         _grid.Columns.Add("Timestamp", "Timestamp");
         _grid.Columns.Add("Value", "Value");
         _grid.Columns.Add("Status", "Status");
 
+        var btnExport = new Button { Text = "Export CSV...", Left = 320, Top = 502, Width = 140, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
+        btnExport.Click += (s, e) => ExportHistory();
+
         page.Controls.AddRange(new Control[]
         {
-            lblTag, _cmbHistTag,
-            lblStart, _dtStart, lblEnd, _dtEnd,
-            btnRead, btnExport,
-            _grid
+            btnBrowse, lblStart, _dtStart, lblEnd, _dtEnd, btnRead,
+            lblTree, _histTree, _grid, btnExport
         });
         return page;
     }
 
-    private void RefreshHistoryTagList()
+    private async Task ConnectAndBrowseHistoryAsync()
     {
-        string current = _cmbHistTag.Text;
-        _cmbHistTag.Items.Clear();
-        foreach (var tag in _lstTags.Items)
+        try
         {
-            _cmbHistTag.Items.Add(tag.ToString());
+            UseWaitCursor = true;
+            SetStatus("Connecting ...");
+
+            await EnsureSessionAsync();
+
+            _histTree.Nodes.Clear();
+            var root = new TreeNode("Objects")
+            {
+                Tag = new NodeTag { Id = ObjectIds.ObjectsFolder, IsVariable = false }
+            };
+            root.Nodes.Add(new TreeNode("..."));
+            _histTree.Nodes.Add(root);
+            root.Expand();
+
+            SetStatus("Expand the tree and check the historized tags (marked (H)), then Read History.");
         }
-        if (!string.IsNullOrEmpty(current))
+        catch (Exception ex)
         {
-            _cmbHistTag.Text = current;
+            SetStatus("Connect failed.");
+            MessageBox.Show(this, ex.Message, "Connect failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        else if (_cmbHistTag.Items.Count > 0)
+        finally
         {
-            _cmbHistTag.SelectedIndex = 0;
+            UseWaitCursor = false;
+        }
+    }
+
+    private System.Collections.Generic.List<NodeId> GetCheckedVariableNodes()
+    {
+        var list = new System.Collections.Generic.List<NodeId>();
+        CollectCheckedVariables(_histTree.Nodes, list);
+        return list;
+    }
+
+    private void CollectCheckedVariables(TreeNodeCollection nodes, System.Collections.Generic.List<NodeId> list)
+    {
+        foreach (TreeNode n in nodes)
+        {
+            if (n.Checked && n.Tag is NodeTag nt && nt.IsVariable && nt.Id != null)
+            {
+                list.Add(nt.Id);
+            }
+            CollectCheckedVariables(n.Nodes, list);
         }
     }
 
     private async Task ReadHistoryAsync()
     {
-        string nodeIdStr = _cmbHistTag.Text.Trim();
-        if (nodeIdStr.Length == 0)
+        var nodeIds = GetCheckedVariableNodes();
+        if (nodeIds.Count == 0)
         {
-            SetStatus("Select or enter a tag NodeId to read.");
+            SetStatus("Check one or more variable tags (green/blue) in the tree first.");
             return;
         }
 
         DateTime startUtc = _dtStart.Value.ToUniversalTime();
         DateTime endUtc = _dtEnd.Value.ToUniversalTime();
+        if (endUtc <= startUtc)
+        {
+            SetStatus("End time must be after start time.");
+            return;
+        }
 
         try
         {
             UseWaitCursor = true;
-            SetStatus($"Reading history for {nodeIdStr} ...");
+            SetStatus($"Reading history for {nodeIds.Count} tag(s) ...");
 
             var session = await EnsureSessionAsync();
-            NodeId nodeId = NodeId.Parse(nodeIdStr);
-            var values = await Task.Run(() => OpcUaHelper.ReadHistory(session, nodeId, startUtc, endUtc));
 
             _grid.Rows.Clear();
-            foreach (var dv in values)
+            int total = 0;
+            foreach (var nodeId in nodeIds)
             {
-                _grid.Rows.Add(
-                    dv.SourceTimestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff"),
-                    dv.Value?.ToString() ?? "null",
-                    dv.StatusCode.ToString());
+                string tagStr = nodeId.ToString();
+                System.Collections.Generic.List<DataValue> values;
+                try
+                {
+                    values = await Task.Run(() => OpcUaHelper.ReadHistory(session, nodeId, startUtc, endUtc));
+                }
+                catch (Exception ex)
+                {
+                    SetStatus($"{tagStr}: {ex.Message}");
+                    continue;
+                }
+
+                foreach (var dv in values)
+                {
+                    _grid.Rows.Add(
+                        tagStr,
+                        dv.SourceTimestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff"),
+                        dv.Value?.ToString() ?? "null",
+                        dv.StatusCode.ToString());
+                    total++;
+                }
             }
 
-            SetStatus(values.Count == 0
-                ? "No historical values returned. Confirm the tag is historized in the Local Historian and the time range has data."
-                : $"Read {values.Count} value(s) for {nodeIdStr}.");
+            SetStatus(total == 0
+                ? "No historical values returned. Confirm the tags are historized in the Local Historian and the window has data."
+                : $"Read {total} value(s) across {nodeIds.Count} tag(s).");
         }
         catch (Exception ex)
         {
@@ -540,7 +599,6 @@ public class ConfigForm : Form
                 return;
             }
 
-            string tag = _cmbHistTag.Text.Trim();
             try
             {
                 using (var w = new StreamWriter(dlg.FileName, false, new UTF8Encoding(false)))
@@ -552,9 +610,10 @@ public class ConfigForm : Form
                         {
                             continue;
                         }
-                        string ts = row.Cells[0].Value?.ToString() ?? "";
-                        string val = row.Cells[1].Value?.ToString() ?? "";
-                        string st = row.Cells[2].Value?.ToString() ?? "";
+                        string tag = row.Cells[0].Value?.ToString() ?? "";
+                        string ts = row.Cells[1].Value?.ToString() ?? "";
+                        string val = row.Cells[2].Value?.ToString() ?? "";
+                        string st = row.Cells[3].Value?.ToString() ?? "";
                         w.WriteLine($"{ts},{tag},{val},{st}");
                     }
                 }
@@ -725,7 +784,16 @@ public class ConfigForm : Form
 
     private void Tree_BeforeExpand(object sender, TreeViewCancelEventArgs e)
     {
-        var node = e.Node;
+        PopulateChildren(e.Node, markHistorizing: false);
+    }
+
+    private void HistTree_BeforeExpand(object sender, TreeViewCancelEventArgs e)
+    {
+        PopulateChildren(e.Node, markHistorizing: true);
+    }
+
+    private void PopulateChildren(TreeNode node, bool markHistorizing)
+    {
         if (node.Nodes.Count != 1 || node.Nodes[0].Text != "...")
         {
             return; // already populated
@@ -739,6 +807,8 @@ public class ConfigForm : Form
         try
         {
             var refs = OpcUaHelper.Browse(_session, tag.Id);
+            var variableIds = new System.Collections.Generic.List<NodeId>();
+
             foreach (var r in refs)
             {
                 var childId = ExpandedNodeId.ToNodeId(r.NodeId, _session.NamespaceUris);
@@ -753,11 +823,50 @@ public class ConfigForm : Form
                     child.Nodes.Add(new TreeNode("...")); // objects may have children
                 }
                 node.Nodes.Add(child);
+
+                if (isVariable && childId != null)
+                {
+                    variableIds.Add(childId);
+                }
+            }
+
+            if (markHistorizing && variableIds.Count > 0)
+            {
+                MarkHistorizing(node, variableIds);
             }
         }
         catch (Exception ex)
         {
             SetStatus($"Browse failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Reads the Historizing attribute and annotates variable nodes accordingly.</summary>
+    private void MarkHistorizing(TreeNode parent, System.Collections.Generic.List<NodeId> variableIds)
+    {
+        try
+        {
+            var flags = OpcUaHelper.ReadHistorizingFlags(_session, variableIds);
+            foreach (TreeNode child in parent.Nodes)
+            {
+                if (child.Tag is NodeTag nt && nt.IsVariable && nt.Id != null &&
+                    flags.TryGetValue(nt.Id.ToString(), out bool historizing))
+                {
+                    if (historizing)
+                    {
+                        child.Text += "  (H)";
+                        child.ForeColor = Color.Blue;
+                    }
+                    else
+                    {
+                        child.ForeColor = Color.Gray;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Historizing detection is best-effort; ignore if the server rejects it.
         }
     }
 

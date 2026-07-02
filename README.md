@@ -35,8 +35,9 @@ so moving to a new machine is just build + configure. The window provides:
   **username/password** login
 - **Tags** tab: **browse** the server address space and add variable nodes
 - **Logging** tab: set the **CSV output path** and **scan interval**
-- **History** tab: read archived values for a tag over a time range from
-  Kepware's Local Historian (OPC UA Historical Access) and export to CSV
+- **History** tab: browse the address space, check one or more historized
+  tags (marked **(H)**), read their archived values over a start/end window
+  from Kepware's Local Historian (OPC UA Historical Access), and export to CSV
 
 Click **Save** on any change to persist `appsettings.json`.
 
@@ -53,9 +54,11 @@ dotnet run -- --headless
 Kepware's Local Historian archives (e.g.
 `C:\ProgramData\PTC\Kepware Server\V7\Historical Data`) are a proprietary
 binary format and should not be read directly. Instead, the **History** tab
-queries them over OPC UA Historical Access: choose a tag and a start/end
-time, click **Read History**, and optionally **Export CSV**. Only tags that
-are enabled for historization in the Local Historian plug-in return data.
+queries them over OPC UA Historical Access: click **Connect & Browse**,
+expand the tree and check the tags you want (historized tags are marked
+**(H)** in blue), choose a start/end window, click **Read History**, and
+optionally **Export CSV**. Only tags enabled for historization in the Local
+Historian plug-in return data.
 
 ## Technologies
 

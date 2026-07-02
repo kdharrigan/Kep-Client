@@ -196,6 +196,42 @@ public static class OpcUaHelper
         return values;
     }
 
+    /// <summary>
+    /// Reads the Historizing attribute for a set of variable nodes in one call,
+    /// returning a map of NodeId string -> whether the node has history enabled.
+    /// </summary>
+    public static Dictionary<string, bool> ReadHistorizingFlags(Session session, IList<NodeId> nodeIds)
+    {
+        var map = new Dictionary<string, bool>();
+
+        var toRead = new ReadValueIdCollection();
+        foreach (var id in nodeIds)
+        {
+            toRead.Add(new ReadValueId { NodeId = id, AttributeId = Attributes.Historizing });
+        }
+
+        session.Read(
+            null,
+            0,
+            TimestampsToReturn.Neither,
+            toRead,
+            out DataValueCollection results,
+            out DiagnosticInfoCollection _);
+
+        for (int i = 0; i < nodeIds.Count && i < results.Count; i++)
+        {
+            bool historizing = false;
+            DataValue dv = results[i];
+            if (StatusCode.IsGood(dv.StatusCode) && dv.Value is bool b)
+            {
+                historizing = b;
+            }
+            map[nodeIds[i].ToString()] = historizing;
+        }
+
+        return map;
+    }
+
     /// <summary>Browses the hierarchical children (objects and variables) of a node.</summary>
     public static ReferenceDescriptionCollection Browse(Session session, NodeId nodeId)
     {
