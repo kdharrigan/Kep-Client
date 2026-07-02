@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Opc.Ua;
@@ -42,7 +43,7 @@ class Program
             }
 
             // Open StreamWriter for efficient CSV writing
-            csvWriter = new StreamWriter(csvPath, append: true, bufferSize: 65536)
+            csvWriter = new StreamWriter(csvPath, append: true, encoding: new UTF8Encoding(false), bufferSize: 65536)
             {
                 AutoFlush = false
             };
@@ -146,6 +147,7 @@ class Program
 
                 var endpointDescription =
                     CoreClientUtils.SelectEndpoint(
+                        config,
                         "opc.tcp://localhost:49320",
                         useSecurity: false
                     );
