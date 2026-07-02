@@ -1,30 +1,51 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using Opc.Ua;
 using Opc.Ua.Client;
-using Opc.Ua.Configuration;
 
 class Program
 {
     static Session session;
-    static string csvPath = @"C:\Historian\kepware_historian.csv";
+    static AppSettings settings = new AppSettings();
     static StreamWriter csvWriter;
     static readonly object csvLock = new object();
     static CancellationTokenSource cts = new CancellationTokenSource();
 
-    static List<string> tagList = new List<string>
+    [STAThread]
+    static void Main(string[] args)
     {
-        "ns=2;s=Channel1.Device1.Tag1",
-        "ns=2;s=Channel1.Device1.Tag2"
-        // add more tags OR later we can auto-discover them
-    };
+        // Launch the configuration UI with:  dotnet run -- --configure
+        if (args.Any(a => a.Equals("--configure", StringComparison.OrdinalIgnoreCase))
+            || args.Any(a => a.Equals("-c", StringComparison.OrdinalIgnoreCase)))
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new ConfigForm());
+            return;
+        }
 
-    static async Task Main(string[] args)
+        RunHistorianAsync().GetAwaiter().GetResult();
+    }
+
+    static async Task RunHistorianAsync()
     {
+        settings = AppSettings.Load();
+
+        if (settings.Historian.Tags.Count == 0)
+        {
+            Console.WriteLine("No tags are configured yet.");
+            Console.WriteLine("Run the configuration utility to discover a server and pick tags:");
+            Console.WriteLine();
+            Console.WriteLine("    dotnet run -- --configure");
+            Console.WriteLine();
+            return;
+        }
+
         try
         {
             // Setup graceful shutdown
@@ -34,16 +55,16 @@ class Program
                 cts.Cancel();
             };
 
-            Directory.CreateDirectory(Path.GetDirectoryName(csvPath));
+            Directory.CreateDirectory(Path.GetDirectoryName(settings.Historian.CsvPath));
 
             // Initialize CSV with header if needed
-            if (!File.Exists(csvPath))
+            if (!File.Exists(settings.Historian.CsvPath))
             {
-                File.WriteAllText(csvPath, "Timestamp,Tag,Value,StatusCode\n");
+                File.WriteAllText(settings.Historian.CsvPath, "Timestamp,Tag,Value,StatusCode\n");
             }
 
             // Open StreamWriter for efficient CSV writing
-            csvWriter = new StreamWriter(csvPath, append: true, encoding: new UTF8Encoding(false), bufferSize: 65536)
+            csvWriter = new StreamWriter(settings.Historian.CsvPath, append: true, encoding: new UTF8Encoding(false), bufferSize: 65536)
             {
                 AutoFlush = false
             };
@@ -63,7 +84,7 @@ class Program
                     }
 
                     // Read all tags
-                    foreach (var tag in tagList)
+                    foreach (var tag in settings.Historian.Tags)
                     {
                         try
                         {
@@ -79,7 +100,7 @@ class Program
                     // Flush periodically to ensure data is written
                     csvWriter.Flush();
 
-                    await Task.Delay(5000, cts.Token); // scan rate
+                    await Task.Delay(settings.Historian.ScanIntervalMs, cts.Token); // scan rate
                 }
                 catch (OperationCanceledException)
                 {
@@ -117,101 +138,10 @@ class Program
         {
             try
             {
-                Console.WriteLine($"Connecting to Kepware (attempt {retryCount + 1})...");
+                Console.WriteLine($"Connecting to {settings.Opc.EndpointUrl} (attempt {retryCount + 1})...");
 
-                // PKI stores must be specified even for an unsecured connection,
-                // otherwise config validation throws
-                // "TrustedIssuerCertificates StorePath must be specified."
-                const string pkiRoot =
-                    @"%LocalApplicationData%\KepwareHistorianClient\pki";
-
-                var config = new ApplicationConfiguration()
-                {
-                    ApplicationName = "KepwareHistorianClient",
-                    ApplicationUri = "urn:localhost:KepwareHistorianClient",
-                    ApplicationType = ApplicationType.Client,
-                    SecurityConfiguration = new SecurityConfiguration
-                    {
-                        AutoAcceptUntrustedCertificates = true,
-                        AddAppCertToTrustedStore = true,
-                        ApplicationCertificate = new CertificateIdentifier
-                        {
-                            StoreType = "Directory",
-                            StorePath = pkiRoot + @"\own",
-                            SubjectName = "CN=KepwareHistorianClient, DC=localhost"
-                        },
-                        TrustedIssuerCertificates = new CertificateTrustList
-                        {
-                            StoreType = "Directory",
-                            StorePath = pkiRoot + @"\issuer"
-                        },
-                        TrustedPeerCertificates = new CertificateTrustList
-                        {
-                            StoreType = "Directory",
-                            StorePath = pkiRoot + @"\trusted"
-                        },
-                        RejectedCertificateStore = new CertificateStoreIdentifier
-                        {
-                            StoreType = "Directory",
-                            StorePath = pkiRoot + @"\rejected"
-                        }
-                    },
-                    TransportQuotas = new TransportQuotas
-                    {
-                        OperationTimeout = 15000
-                    },
-                    ClientConfiguration = new ClientConfiguration
-                    {
-                        DefaultSessionTimeout = 60000
-                    }
-                };
-
-                await config.Validate(ApplicationType.Client);
-
-                config.CertificateValidator.CertificateValidation += (s, e) =>
-                {
-                    e.Accept = true;
-                };
-
-                // The stack requires a client application instance certificate
-                // even for unsecured sessions. Create a self-signed one in the
-                // "own" store on first run if it doesn't already exist.
-                var application = new ApplicationInstance
-                {
-                    ApplicationName = config.ApplicationName,
-                    ApplicationType = ApplicationType.Client,
-                    ApplicationConfiguration = config
-                };
-                bool haveCert =
-                    await application.CheckApplicationInstanceCertificate(false, 2048);
-                if (!haveCert)
-                {
-                    throw new Exception(
-                        "Application instance certificate could not be created.");
-                }
-
-                var endpointDescription =
-                    CoreClientUtils.SelectEndpoint(
-                        config,
-                        "opc.tcp://localhost:49320",
-                        useSecurity: false
-                    );
-
-                var endpoint = new ConfiguredEndpoint(
-                    null,
-                    endpointDescription,
-                    EndpointConfiguration.Create(config)
-                );
-
-                session = await Session.Create(
-                    config,
-                    endpoint,
-                    false,
-                    "KepwareSession",
-                    60000,
-                    null,
-                    null
-                );
+                var config = await OpcUaHelper.BuildConfigurationAsync();
+                session = await OpcUaHelper.CreateSessionAsync(config, settings);
 
                 Console.WriteLine("Connected successfully.\n");
                 return;
